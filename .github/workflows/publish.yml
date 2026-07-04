@@ -32,4 +32,5 @@ jobs:
           description: Official Java WAF agent SDK for Relintio.
           version: ${{ github.ref_name }}
           directory: target
-          token-auth: true
+          central-username: ${{ secrets.MAVEN_USERNAME }}
+          central-password: ${{ secrets.MAVEN_PASSWORD }}
