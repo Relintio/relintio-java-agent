@@ -23,14 +23,40 @@ jobs:
           cache: 'maven'
 
       - name: Build and Package with Maven
-        run: mvn clean package -DskipTests
+        run: |
+          mvn clean package -DskipTests
+          version="${GITHUB_REF_NAME#v}"
+          
+          mkdir bundle
+          cp target/relintio-agent-$version.jar bundle/
+          cp target/relintio-agent-$version-sources.jar bundle/
+          cp target/relintio-agent-$version-javadoc.jar bundle/
+          cp pom.xml bundle/relintio-agent-$version.pom
 
-      - name: Publish to Maven Central Portal
-        uses: sonatype/central-publisher-action@v2
+      - name: Import GPG Key
+        uses: crazy-max/ghaction-import-gpg@v6
         with:
-          name: relintio-agent
-          description: Official Java WAF agent SDK for Relintio.
-          version: ${{ github.ref_name }}
-          directory: target
-          central-username: ${{ secrets.MAVEN_USERNAME }}
-          central-password: ${{ secrets.MAVEN_PASSWORD }}
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Sign files and create bundle
+        run: |
+          # Sign all files in the bundle
+          for file in bundle/*; do
+            gpg --detach-sign --armor --passphrase "${{ secrets.GPG_PASSPHRASE }}" --pinentry-mode loopback "$file"
+          done
+          
+          # Create deployment zip
+          cd bundle
+          zip ../bundle.zip *
+
+      - name: Publish to Sonatype Central Portal
+        env:
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+        run: |
+          curl --fail -u "$MAVEN_USERNAME:$MAVEN_PASSWORD" \
+            -X POST \
+            -F "bundle=@bundle.zip" \
+            "https://central.sonatype.com/api/v1/publisher/upload?publishingType=AUTOMATIC"
+
