@@ -22,18 +22,12 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      - name: Build and Package with Maven
+      - name: Build, Package, and Deploy Locally
         run: |
-          mvn clean package -DskipTests
-          version="${GITHUB_REF_NAME#v}"
-          
-          mkdir bundle
-          cp target/relintio-agent-$version.jar bundle/
-          cp target/relintio-agent-$version-sources.jar bundle/
-          cp target/relintio-agent-$version-javadoc.jar bundle/
-          cp pom.xml bundle/relintio-agent-$version.pom
+          # Deploy locally to automatically generate correct directory layout and checksums
+          mvn clean deploy -DaltDeploymentRepository=local::default::file://$(pwd)/repo -DskipTests
 
-      - name: Generate GPG Key, Publish, and Sign Bundle
+      - name: Generate GPG Key, Publish, Sign, and Create Bundle
         run: |
           # 1. Define GPG Key generation config
           cat <<EOF > gpg-key-config
@@ -62,16 +56,26 @@ jobs:
           gpg --keyserver pgp.mit.edu --send-keys "$key_id" || true
           
           # Wait for keyserver propagation
-          sleep 10
+          sleep 15
 
-          # 5. Sign all files in the bundle
-          for file in bundle/*; do
-            gpg --detach-sign --armor --pinentry-mode loopback "$file"
+          # 5. Sign all artifact files in the repository structure
+          version="${GITHUB_REF_NAME#v}"
+          dir="repo/com/relintio/relintio-agent/$version"
+          for file in $dir/*; do
+            if [[ ! "$file" =~ \.(sha1|md5)$ ]]; then
+              gpg --detach-sign --armor --pinentry-mode loopback "$file"
+            fi
+          done
+
+          # 6. Generate checksums for the generated signature (.asc) files
+          for file in $dir/*.asc; do
+            md5sum "$file" | awk '{print $1}' > "${file}.md5"
+            sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
           done
           
-          # 6. Create deployment zip
-          cd bundle
-          zip ../bundle.zip *
+          # 7. Create deployment zip preserving directory layout
+          cd repo
+          zip -r ../bundle.zip *
 
       - name: Publish to Sonatype Central Portal
         env:
