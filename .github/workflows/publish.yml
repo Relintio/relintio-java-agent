@@ -33,20 +33,43 @@ jobs:
           cp target/relintio-agent-$version-javadoc.jar bundle/
           cp pom.xml bundle/relintio-agent-$version.pom
 
-      - name: Import GPG Key
-        uses: crazy-max/ghaction-import-gpg@v6
-        with:
-          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.GPG_PASSPHRASE }}
-
-      - name: Sign files and create bundle
+      - name: Generate GPG Key, Publish, and Sign Bundle
         run: |
-          # Sign all files in the bundle
+          # 1. Define GPG Key generation config
+          cat <<EOF > gpg-key-config
+          Key-Type: RSA
+          Key-Length: 2048
+          Subkey-Type: RSA
+          Subkey-Length: 2048
+          Name-Real: Relintio Operations
+          Name-Email: operations@relintio.com
+          Expire-Date: 0
+          %no-ask-passphrase
+          %no-protection
+          %commit
+          EOF
+
+          # 2. Generate the key pair
+          gpg --batch --generate-key gpg-key-config
+
+          # 3. Extract the generated Key ID
+          key_id=$(gpg --list-keys --with-colons | grep '^pub' | cut -d: -f5)
+          echo "Generated GPG Key ID: $key_id"
+
+          # 4. Publish public key to keyservers
+          gpg --keyserver keyserver.ubuntu.com --send-keys "$key_id" || true
+          gpg --keyserver keys.openpgp.org --send-keys "$key_id" || true
+          gpg --keyserver pgp.mit.edu --send-keys "$key_id" || true
+          
+          # Wait for keyserver propagation
+          sleep 10
+
+          # 5. Sign all files in the bundle
           for file in bundle/*; do
-            gpg --detach-sign --armor --passphrase "${{ secrets.GPG_PASSPHRASE }}" --pinentry-mode loopback "$file"
+            gpg --detach-sign --armor --pinentry-mode loopback "$file"
           done
           
-          # Create deployment zip
+          # 6. Create deployment zip
           cd bundle
           zip ../bundle.zip *
 
