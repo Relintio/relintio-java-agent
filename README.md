@@ -10,14 +10,14 @@ Add the dependency to your `pom.xml`:
 <dependency>
     <groupId>com.relintio</groupId>
     <artifactId>relintio-agent</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.4</version>
 </dependency>
 ```
 
 Or for Gradle:
 
 ```groovy
-implementation 'com.relintio:relintio-agent:0.1.0'
+implementation 'com.relintio:relintio-agent:0.1.4'
 ```
 
 ## Features
@@ -50,7 +50,8 @@ public class SecurityConfig {
         // 1. Configure the Relintio Agent
         AgentConfig config = new AgentConfig(
             "YOUR_LICENSE_KEY",
-            "https://api.relintio.com/api",
+            "example.com",
+            "https://relintio.com/api",
             60 // Rules sync interval in seconds
         );
 

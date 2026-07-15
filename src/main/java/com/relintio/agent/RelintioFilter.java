@@ -19,12 +19,16 @@ public class RelintioFilter implements Filter {
         if (this.agent == null) {
             String licenseKey = filterConfig.getInitParameter("licenseKey");
             String apiUrl = filterConfig.getInitParameter("apiUrl");
+            String domain = filterConfig.getInitParameter("domain");
             if (licenseKey == null || licenseKey.isEmpty()) {
                 throw new ServletException("RelintioFilter init-param 'licenseKey' is required.");
             }
-            AgentConfig config = (apiUrl == null || apiUrl.isEmpty()) 
-                    ? new AgentConfig(licenseKey) 
-                    : new AgentConfig(licenseKey, apiUrl, 60);
+            AgentConfig config = new AgentConfig(
+                    licenseKey,
+                    domain == null ? "" : domain,
+                    apiUrl == null || apiUrl.isEmpty() ? "https://relintio.com/api" : apiUrl,
+                    60
+            );
             
             this.agent = new Agent(config);
             this.agent.startSync();

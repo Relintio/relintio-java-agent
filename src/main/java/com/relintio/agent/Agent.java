@@ -8,17 +8,22 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class Agent {
+    private static final String AGENT_VERSION = "0.1.4";
     private final AgentConfig config;
     private final HttpClient httpClient;
     private final List<WafRule> rules;
     private final ScheduledExecutorService scheduler;
+    private final ExecutorService telemetryExecutor;
     private final Object rulesLock = new Object();
+    private final AtomicBoolean started = new AtomicBoolean();
 
     public Agent(AgentConfig config) {
         this.config = config;
@@ -31,31 +36,47 @@ public class Agent {
             thread.setDaemon(true);
             return thread;
         });
+        this.telemetryExecutor = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "relintio-telemetry");
+            thread.setDaemon(true);
+            return thread;
+        });
     }
 
     public void startSync() {
-        scheduler.scheduleAtFixedRate(this::syncRules, 0, config.getSyncIntervalSeconds(), TimeUnit.SECONDS);
+        if (started.compareAndSet(false, true)) {
+            scheduler.scheduleWithFixedDelay(this::syncRules, 0, Math.max(1, config.getSyncIntervalSeconds()), TimeUnit.SECONDS);
+        }
     }
 
     public void deinit() {
         scheduler.shutdown();
+        telemetryExecutor.shutdown();
         try {
             if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
                 scheduler.shutdownNow();
             }
+            if (!telemetryExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                telemetryExecutor.shutdownNow();
+            }
         } catch (InterruptedException e) {
             scheduler.shutdownNow();
+            telemetryExecutor.shutdownNow();
             Thread.currentThread().interrupt();
         }
     }
 
     public void syncRules() {
         try {
+            String payload = String.format(
+                    "{\"license_key\":\"%s\",\"domain\":\"%s\",\"protocol_version\":1,\"agent_kind\":\"java\",\"agent_version\":\"%s\",\"capabilities\":[\"custom_rules\",\"telemetry\"]}",
+                    escapeJson(config.getLicenseKey()), escapeJson(config.getDomain()), AGENT_VERSION
+            );
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(config.getApiUrl() + "/rules/sync"))
+                    .uri(URI.create(apiEndpoint("/agent/verify")))
                     .timeout(Duration.ofSeconds(10))
-                    .header("Authorization", "Bearer " + config.getLicenseKey())
-                    .GET()
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(payload))
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
@@ -116,19 +137,23 @@ public class Agent {
     }
 
     public void sendTelemetry(String ip, String userAgent, String path, WafResult result) {
+        if (telemetryExecutor.isShutdown()) {
+            return;
+        }
+
         // Run telemetry log asynchronously to avoid blocking request response pipelines
-        Executors.newSingleThreadExecutor().submit(() -> {
+        telemetryExecutor.submit(() -> {
             try {
                 String payload = String.format(
-                        "{\"ip\":\"%s\",\"user_agent\":\"%s\",\"path\":\"%s\",\"score\":%d,\"action\":\"%s\",\"timestamp\":%d}",
+                        "{\"license_key\":\"%s\",\"ip\":\"%s\",\"user_agent\":\"%s\",\"path\":\"%s\",\"risk_score\":%d,\"action\":\"%s\",\"reason_code\":\"sdk_rule\",\"protocol_version\":1,\"agent_kind\":\"java\",\"agent_version\":\"%s\"}",
+                        escapeJson(config.getLicenseKey()),
                         escapeJson(ip), escapeJson(userAgent), escapeJson(path),
-                        result.getScore(), result.getAction(), System.currentTimeMillis() / 1000
+                        Math.max(0, Math.min(100, result.getScore())), result.getAction().toUpperCase(), AGENT_VERSION
                 );
 
                 HttpRequest request = HttpRequest.newBuilder()
-                        .uri(URI.create(config.getApiUrl() + "/telemetry/log"))
+                        .uri(URI.create(apiEndpoint("/agent/log")))
                         .timeout(Duration.ofSeconds(10))
-                        .header("Authorization", "Bearer " + config.getLicenseKey())
                         .header("Content-Type", "application/json")
                         .POST(HttpRequest.BodyPublishers.ofString(payload))
                         .build();
@@ -158,6 +183,10 @@ public class Agent {
                 .replace("\n", "\\n")
                 .replace("\r", "\\r")
                 .replace("\t", "\\t");
+    }
+
+    private String apiEndpoint(String path) {
+        return config.getApiUrl().replaceAll("/+$", "") + path;
     }
 
     private List<WafRule> parseRulesJson(String body) {
